@@ -31,7 +31,7 @@ We present the workflow to analyse DNA methylation data to detect co-methylated 
 1) Detecting genomic regions of **co**-methylation (an unsupervised analysis), and
 2) Testing if methylation in these co-methylated regions are related to the phenotype of interest (a supervised analysis).
 
-![](../figures/coMethDMR_workflow.jpeg)
+![](figures/coMethDMR_workflow.jpeg)
 
 We will use the [Tidyverse](https://www.tidyverse.org/) package suite for data wrangling (with added consideration for row names of our methylation data).
 
@@ -63,7 +63,7 @@ library(tidyverse)
 
 ```{r, load-pheno-data, message=FALSE}
 pheno_df <-
-  read_csv("../data/pheno_clean_20220225.csv") %>% 
+  read_csv("data/pheno_clean_20220225.csv") %>% 
   # the coMethDMR package expects the sample ID column to be named "Sample"
   rename(Sample = SampleID) %>% 
   # the linear mixed model (as currently coded) cannot take non-numeric
@@ -85,7 +85,7 @@ pheno_df[1:5, ]
 Missing values were quite rare (about 0.1% of the values) and were imputed via a probe-specific Gaussian process. Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the data is currently embargoed by NIDA, we show a synthetic variant of the real data which preserves correlational structure between the methylation probes.
 ```{r, load-DNAm-data, message=FALSE}
 DNAm_df <- 
-  read_csv("../data/dnaM_chr16_synthetic_20220716.csv") %>% 
+  read_csv("data/dnaM_chr16_synthetic_20220716.csv") %>% 
   as.data.frame() %>% 
   column_to_rownames(var = "Sample")
 
@@ -99,7 +99,7 @@ The coMethDMR package include pre-computed genomic regions that include CpGs loc
 
 Again, for computational concerns, we will only use data from the genic regions of chromosome 16 in this workshop's example, dropping the other chromosomes from our list of close-by probes.
 ```{r, clode-by-CpGs}
-closeByGeneAll_ls <- readRDS("../data/EPIC_10b4_Gene_3_200.rds")
+closeByGeneAll_ls <- readRDS("data/EPIC_10b4_Gene_3_200.rds")
 chr16_lgl <- str_detect(names(closeByGeneAll_ls), "chr16")
 # table(chr16_lgl)
 closeByGeneChr16_ls <- closeByGeneAll_ls[chr16_lgl]
@@ -173,7 +173,7 @@ If we want to try to find which CpGs are related to heroin use after adjusting f
 Using data from chromosome 16 only, this code runs in 1.6 minutes on my computer.
 ```{r, calculate-meth-resid1, eval=FALSE}
 system.time(
-  residByAge_mat <- GetResiduals(
+  residByAgeSex_mat <- GetResiduals(
   	dnam = DNAm_df,
   	pheno_df = pheno_df,
   	betaToM = TRUE,
@@ -183,20 +183,20 @@ system.time(
   )
 )
 
-residByAge_df <- as_tibble(residByAge_mat, rownames = "probeID")
-# write_csv(
-#   residByAge_df,
-#   file = "../results/probe16_residuals_age_sex_20220716.csv"
+residByAgeSex_df <- as_tibble(residByAgeSex_mat, rownames = "probeID")
+# saveRDS(
+#   residByAgeSex_df,
+#   file = "results/chr16_residuals_age_sex_20220716.rds"
 # )
 ```
 
 If you don't want to wait, we have these results calculated, so you can load them.
 ```{r, load-meth-resid1, message=FALSE}
-residByAge_df <- 
-  read_csv(file = "../results/probe16_residuals_age_sex_20220716.csv") %>% 
+residByAgeSex_df <- 
+  readRDS(file = "results/chr16_residuals_age_sex_20220716.rds") %>% 
   column_to_rownames(var = "probeID")
 
-residByAge_df[1:5, 1:5]
+residByAgeSex_df[1:5, 1:5]
 ```
 
 
@@ -210,7 +210,7 @@ Finding all the regions of concurrent methylation in chromosome 16 takes 7-8 min
 ###  For Downstream Analysis  ###
 system.time(
   coMethAgeSex_ls <- CoMethAllRegions(
-    dnam = residByAge_df,
+    dnam = residByAgeSex_df,
     betaToM = FALSE,
     method = "spearman",
     arrayType = "EPIC",
@@ -222,14 +222,14 @@ system.time(
 
 # saveRDS(
 #   coMethAgeSex_ls,
-#   file = "../results/chr16_coMethylated_regions_chr_age_sex_20220716.rds"
+#   file = "results/chr16_coMethylated_regions_age_sex_20220716.rds"
 # )
 
 
 ###  For Inspection and Troubleshooting ONLY  ###
 system.time(
   coMethAgeSexDF_ls <- CoMethAllRegions(
-    dnam = residByAge_df,
+    dnam = residByAgeSex_df,
     betaToM = FALSE,
     method = "spearman",
     arrayType = "EPIC",
@@ -239,9 +239,10 @@ system.time(
   )
 )
 
+# # We save ONLY the first result (as an example)
 # saveRDS(
-#   coMethAgeSexDF_ls,
-#   file = "../results/chr16_coMethylated_regions_df_age_sex_20220716.rds"
+#   coMethAgeSexDF_ls[[1]],
+#   file = "results/chr16_coMethylated_region1_df_age_sex_20220716.rds"
 # )
 ```
 
@@ -249,12 +250,12 @@ As previously, we have also calculated these regions of concurrent methylation.
 ```{r, load-concurrent-meth1}
 # For Analysis
 coMethAgeSex_ls <- readRDS(
-  file = "../results/chr16_coMethylated_regions_chr_age_sex_20220716.rds"
+  file = "results/chr16_coMethylated_regions_age_sex_20220716.rds"
 )
-# Inspection ONLY (and notice we only keep the first entry)
+# Inspection ONLY 
 coMethAgeSex_df <- readRDS(
-  file = "../results/chr16_coMethylated_regions_df_age_sex_20220716.rds"
-)[[1]]
+  file = "results/chr16_coMethylated_region1_df_age_sex_20220716.rds"
+)
 
 coMethAgeSex_df
 ```
@@ -325,7 +326,7 @@ We specify the following:
 - `covariates_char = c("is_female", "Age", "Age_sq")`: which covariates should be used as moderators of the response's effect on DNA methylation? Often sex, age, and plate/batch effects should be included here.
 - `modelType = "randCoef"`: use a random coefficient mixed model, as described above
 - `arrayType = "EPIC"`: which Illumina manifest matches your data? We currently support 450k and EPIC, but we are researching appropriate statistical methods for whole genome methylation analysis.
-- `outLogFile = paste0("../results/lmmLog_", Sys.Date(), ".txt")`: where should the log file go? This file will contain messages about the convergence of the linear mixed model's optimization routines. If you are running a quick test, this can be `NULL`.
+- `outLogFile = paste0("results/lmmLog_", Sys.Date(), ".txt")`: where should the log file go? This file will contain messages about the convergence of the linear mixed model's optimization routines. If you are running a quick test, this can be `NULL`.
 - `nCores_int = 8L`: how many cores should you use? Note that fitting these mixed models can be memory intensive, so more cores are not always better. Try a few options with smaller subsets of your data to find the "sweet spot".
 
 With 8 cores on my Macbook, this takes 2-4 minutes for ~1100 regions.
@@ -340,21 +341,21 @@ system.time(
     covariates_char = c("is_female", "Age", "Age_sq"),
     modelType = "randCoef",
     arrayType = "EPIC",
-    # outLogFile = paste0("../results/lmmLog_", Sys.Date(), ".txt"),
+    # outLogFile = paste0("results/lmmLog_", Sys.Date(), ".txt"),
     nCores_int = 8L
   )
 )
 
 write_csv(
   x = lmmHeroinOut_df,
-  file = "../results/chr16_coMethylated_results_heroin_use_20220716.csv"
+  file = "results/chr16_coMethylated_results_heroin_use_20220716.csv"
 )
 ```
 
 Again, we have calculated this output for you:
 ```{r, load-differential-co-meth-1, message=FALSE}
 lmmHeroinOut_df <- read_csv(
-  file = "../results/chr16_coMethylated_results_heroin_use_20220716.csv"
+  file = "results/chr16_coMethylated_results_heroin_use_20220716.csv"
 )
 
 lmmHeroinOut_df
