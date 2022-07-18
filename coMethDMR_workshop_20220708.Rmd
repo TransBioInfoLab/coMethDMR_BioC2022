@@ -1,0 +1,413 @@
+---
+title: "Detecting Differentially Methylated Regions with coMethDMR"
+author: "Gabriel J. Odom, Suky Martinez, Tiago Silva, Ingrid Gonzalez, Fernanda Veitzman, Lissette Gomez, Jermaine Jones, and Lily Wang"
+date: "`r Sys.Date()`"
+output: 
+  BiocStyle::html_document:
+    toc_float: true
+    toc: true
+    df_print: paged
+    code_download: false
+    toc_depth: 2
+  word_document:
+    toc: true
+always_allow_html: true
+editor_options:
+  chunk_output_type: inline   
+vignette: >
+  %\VignetteIndexEntry{"coMethDMR Example: Heroin Use Disorder"}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Overview
+
+We present the workflow to analyse DNA methylation data to detect co-methylated genomics regions with differential methylation. There are two main components to the workflow:
+
+1) Detecting genomic regions of **co**-methylation (an unsupervised analysis), and
+2) Testing if methylation in these co-methylated regions are related to the phenotype of interest (a supervised analysis).
+
+![](../figures/coMethDMR_workflow.jpeg)
+
+We will use the [Tidyverse](https://www.tidyverse.org/) package suite for data wrangling (with added consideration for row names of our methylation data).
+
+You will need the following packages to complete the exercises in this example:
+```{r, packages, message=FALSE, warning=FALSE}
+# Data packages; install but don't load
+# BiocManager::install("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+# BiocManager::install("sesameData")
+
+# Packages to load for this workshop
+library(corrplot)
+library(coMethDMR)
+library(pathwayPCA)
+library(kableExtra)
+library(tidyverse)
+```
+
+
+
+*******************************************************************************
+</br>
+
+# Data Inputs and Setup
+
+
+## Phenotype Data Structure
+
+**From Lily** give the biological/medical context of the data first. **Suky's more detailed introduction and motivation goes here.**
+
+```{r, load-pheno-data, message=FALSE}
+pheno_df <-
+  read_csv("../data/pheno_clean_20220225.csv") %>% 
+  # the coMethDMR package expects the sample ID column to be named "Sample"
+  rename(Sample = SampleID) %>% 
+  # the linear mixed model (as currently coded) cannot take non-numeric
+  #   phenotypes; this is a limitation we are working on resolving. See Issue 17
+  #   https://github.com/TransBioInfoLab/coMethDMR/issues/17
+  mutate(is_case = is_case + 0) %>% 
+  # We have reason to believe that the age effect of may be non-linear for
+  #   certain regions of the genome: https://doi.org/10.1038/s41598-021-88504-0
+  mutate(Age_sq = Age ^ 2) %>% 
+  select(Sample, Tissue, starts_with("is"), everything())
+
+pheno_df[1:5, ]
+```
+
+
+## DNA Methylation Data Structure
+
+**Suky adds bioinformatics details about the collection and pre-processing of the DNA methylation data here.** 
+Missing values were quite rare (about 0.1% of the values) and were imputed via a probe-specific Gaussian process. Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the data is currently embargoed by NIDA, we show a synthetic variant of the real data which preserves correlational structure between the methylation probes.
+```{r, load-DNAm-data, message=FALSE}
+DNAm_df <- 
+  read_csv("../data/dnaM_chr16_synthetic_20220716.csv") %>% 
+  as.data.frame() %>% 
+  column_to_rownames(var = "Sample")
+
+DNAm_df[1:5, 1:5]
+```
+
+
+## Pre-Calculated List of Regions with Contiguous CpGs
+
+The coMethDMR package include pre-computed genomic regions that include CpGs located close to each other. These regions are in different files. The "Gene_3_200" file include genic regions with at least 3 CpG probes, with the probes located within 200 bp to each other. 
+
+Again, for computational concerns, we will only use data from the genic regions of chromosome 16 in this workshop's example, dropping the other chromosomes from our list of close-by probes.
+```{r, clode-by-CpGs}
+closeByGeneAll_ls <- readRDS("../data/EPIC_10b4_Gene_3_200.rds")
+chr16_lgl <- str_detect(names(closeByGeneAll_ls), "chr16")
+# table(chr16_lgl)
+closeByGeneChr16_ls <- closeByGeneAll_ls[chr16_lgl]
+rm(closeByGeneAll_ls, chr16_lgl)
+
+closeByGeneChr16_ls[1:5]
+```
+
+
+## Example: Visualizing Methylation in a Single Region
+
+### Methylation Data for the Region
+We pick the first region in this list and inspect the region IDs and the corresponding data.
+```{r}
+# Region Name
+testRegionName_char <- "chr16:6068831-6069198"
+
+# Region
+testRegion_char <- closeByGeneChr16_ls[[testRegionName_char]]
+testRegion_char
+
+# DNA Methylation Data for that Region (5 Samples)
+DNAm_df[testRegion_char, 1:5]
+```
+
+### A Boxplot of Methylation by Probe
+What does the methylation look like for these probes? We first pivot the data so that each row is one methylation value.
+```{r pivot-example-region}
+testMethPivot_df <- 
+  DNAm_df[testRegion_char, ] %>% 
+  pathwayPCA::TransposeAssay(omeNames = "rowNames") %>% 
+  rownames_to_column("Sample") %>% 
+  pivot_longer(!Sample, names_to = "CpG") %>% 
+  arrange(Sample)
+```
+
+Now we plot the methylation beta values in this example region for these participants.
+```{r plot-example-region, message=FALSE, warning=FALSE}
+ggplot(data = testMethPivot_df) +
+  aes(x = CpG, y = value) +
+  labs(
+    title = "Unadjusted DNA Methylation Beta Values for 96 Participants",
+    subtitle = testRegionName_char,
+    y = "Methylation Beta Value"
+  ) +
+  scale_y_continuous(limits = c(0, 1)) +
+  geom_boxplot(position = "dodge")
+```
+
+
+
+*******************************************************************************
+</br>
+
+# Detect Regions of Co-Methylation with `CoMethAllRegions()`
+
+We now have an example region, but we would like to know if the probes in this region are co-methylated (i.e., that their methylation patterns are correlated within this region). The steps to do this are as follows:
+
+1) Regress out covariate effects from the methylation, then
+2) Find correlated clusters of CpGs within a region
+
+Because this step does not use the phenotype information, it is *unsupervised*.
+
+
+## Step 1: Adjust Methylation for Covariates with `GetResiduals()`
+
+**From Lily**: People might ask - why not include the covariates in one model? 
+
+If we want to try to find which CpGs are related to heroin use after adjusting for age and sex, then we first find the methylation M-value residuals. That is, instead of clustering the raw beta values, we first calculate the methylation M values as the base 2 Logit transformation of the beta values, then fit the following model independently for each probe $j$: `M_j ~ age + age ^ 2 + sex`. We use the residuals from these independent linear models as the inputs of the region-based clustering algorithm in Step 2.
+
+Using data from chromosome 16 only, this code runs in 1.6 minutes on my computer.
+```{r, calculate-meth-resid1, eval=FALSE}
+system.time(
+  residByAge_mat <- GetResiduals(
+  	dnam = DNAm_df,
+  	pheno_df = pheno_df,
+  	betaToM = TRUE,
+  	covariates_char = c("Age", "Age_sq", "is_female"),
+  	# on my Mac, 1 core worked best; on Windows, 3 cores worked best
+  	nCores_int = 1L
+  )
+)
+
+residByAge_df <- as_tibble(residByAge_mat, rownames = "probeID")
+# write_csv(
+#   residByAge_df,
+#   file = "../results/probe16_residuals_age_sex_20220716.csv"
+# )
+```
+
+If you don't want to wait, we have these results calculated, so you can load them.
+```{r, load-meth-resid1, message=FALSE}
+residByAge_df <- 
+  read_csv(file = "../results/probe16_residuals_age_sex_20220716.csv") %>% 
+  column_to_rownames(var = "probeID")
+
+residByAge_df[1:5, 1:5]
+```
+
+
+## Step 2: Detecting Regions of Co-Methylation after Adjusting for Age and Sex
+
+Now that we've adjusted our methylation values for the relevant confounders and controls, we can then search through the pre-defined regions to find those regions which have co-methylation.
+
+Finding all the regions of concurrent methylation in chromosome 16 takes 7-8 minutes. **NOTE**: in the second section of code, we are selecting the option `output = "dataframe"` to show **how** the function marks regions of concurrent methylation; in practice, we use the first section of code and set `output = "CpGs"` for use in downstream analysis.
+```{r, calculate-concurrent-meth1, eval=FALSE}
+
+###  For Downstream Analysis  ###
+system.time(
+  coMethAgeSex_ls <- CoMethAllRegions(
+    dnam = residByAge_df,
+    betaToM = FALSE,
+    method = "spearman",
+    arrayType = "EPIC",
+    CpGs_ls = closeByGeneChr16_ls,
+    output = "CpGs",
+    nCores_int = 3L
+  )
+)
+
+# saveRDS(
+#   coMethAgeSex_ls,
+#   file = "../results/chr16_coMethylated_regions_chr_age_sex_20220716.rds"
+# )
+
+
+###  For Inspection and Troubleshooting ONLY  ###
+system.time(
+  coMethAgeSexDF_ls <- CoMethAllRegions(
+    dnam = residByAge_df,
+    betaToM = FALSE,
+    method = "spearman",
+    arrayType = "EPIC",
+    CpGs_ls = closeByGeneChr16_ls,
+    output = "dataframe",
+    nCores_int = 3L
+  )
+)
+
+# saveRDS(
+#   coMethAgeSexDF_ls,
+#   file = "../results/chr16_coMethylated_regions_df_age_sex_20220716.rds"
+# )
+```
+
+As previously, we have also calculated these regions of concurrent methylation.
+```{r, load-concurrent-meth1}
+# For Analysis
+coMethAgeSex_ls <- readRDS(
+  file = "../results/chr16_coMethylated_regions_chr_age_sex_20220716.rds"
+)
+# Inspection ONLY (and notice we only keep the first entry)
+coMethAgeSex_df <- readRDS(
+  file = "../results/chr16_coMethylated_regions_df_age_sex_20220716.rds"
+)[[1]]
+
+coMethAgeSex_df
+```
+
+This table of results includes the probes in this region ordered by their position on the genome. The `r_drop` column measures the correlation (note the `method = "spearman"` argument) between the methylation values for that probe and the *average* methylation for all the other probes in the region. In our previous simulation studies, we have found that an `r_drop` threshold of 0.4 yielded the best results. We see that the correlation between probe `cg19378133` and the average of the other probes is below the threshold, so it makes sense to not retain that probe. However, probe `cg03586879` passes our threshold, but we are still discarding it. Why? Because probe `cg19378133` breaks the *continuity* of correlated probes across this subregion of the genome; this is what we mean by **co**-methylation: the probes are all next to each other on the genome **and** they are all correlated with each other.
+
+We also explore this example visually. As we can see in the figure below, probes `cg02230017`, `cg08545287`, and `cg03934713` all make up a subregion of **contiguous and concurrent (co-) methylation**.
+```{r}
+DNAm_df[rownames(DNAm_df) %in% coMethAgeSex_df$CpG, ] %>% 
+  pathwayPCA::TransposeAssay(omeNames = "rowNames") %>% 
+  select(coMethAgeSex_df$CpG) %>% 
+  cor() %>% 
+  corrplot::corrplot(method = "number")
+```
+
+We now see that we only want to consider the last three probes in this region as a region of co-methylation. Therefore, the actual results list (from setting option `output = "CpGs"`) looks like this:
+```{r, proper-coMeth-output}
+coMethAgeSex_ls[1]
+```
+
+
+
+*******************************************************************************
+</br>
+
+# Identifying Differetially (Co-)Methylated Regions with `lmmTestAllRegions()`
+
+In the previous step, we identified CpG-dense regions which have concurrent methylation. Now, we will fit independent linear mixed models to measure the association between the phenotype of interest and each detected region.
+
+
+## The Input Data
+
+We need the following pieces of data:
+
+- the list of concurrently methylated regions (from `CoMethAllRegions()`)
+- a data frame of DNA methylation **beta** values (not the residuals) in probe by sample form (with probe IDs as row names)
+- phenotype / clinical data containing a column called `"Sample"` (case sensitivity applies)
+
+
+## Mixed Model Types: Simple or Random Coefficient
+
+Our method offers two mixed models to find associations between DNA methylation in a region with detected co-methylatioin and the phenotype of interest. In the models below, let $M_{ij}$ be the DNA methylation M-value for CpG $j$ in subject $i$; let $X_i$ be the phenotype for subject $i$; let $U_i$ be a random effect for sample $i$; and let $\textbf{V}_{i}$ be a vector of covariates for sample $i$. For more details, please see [Gomez, Odom, et al., (2019)](https://doi.org/10.1093/nar/gkz590). In our example, $X_{i}$ indicates if the subject is a current heroin user or a healthy control; $U_{i}$ is a subject effect that allows the average methylation M-value ($\bar{M}_i$) for each subject to vary; and $\textbf{V}_{i}$ is a vector of the biological sex, age, and square of age for subject $i$.
+
+
+### Simple Linear Mixed Model
+The simple linear mixed model assumes the same effect of $X$ on the methylation for each subject and each CpG, while allowing the average baseline methylation to vary across subjects (via $\beta_0 + U_{i}$). It is defined as
+$$
+M_{ij} = \beta_0 + \beta_1X_{i} + U_{i} + \textbf{bV}_i + \varepsilon_{ij}.
+$$
+
+
+### Random Coefficient Linear Mixed Model
+The random coefficient linear mixed model allows the effect of $X$ on methylation to be different for each CpG (via $\beta_1 + \alpha_{1j})$, while simultaneously allowing for different baseline methylation for subject and CpG (via $\beta_0 + \alpha_{0j} + U_{i}$). It is defined as
+$$
+M_{ij} = (\beta_0 + \alpha_{0j}) + (\beta_1 + \alpha_{1j})X_{i} + U_{i} + \textbf{bV}_i + \varepsilon_{ij},
+$$
+where $[\alpha_{0j}, \alpha_{1j}]^T \sim N(\textbf{0}, \textbf{G})$ are random coefficients for intercepts and slopes, and $\textbf{G}$ is an unstructured covariance matrix. 
+
+
+
+## Differentially Co-Methylated Regions after Adjusting for Age and Sex
+We specify the following:
+
+- `betas = DNAm_df`: our data frame of methylation **beta** values
+- `region_ls = coMethAgeSex_ls`: the list of regions of concurrent methylation (recall that this example only includes genic regions on chromosome 16 for computational concerns)
+- `pheno_df = pheno_df`: clinical data with subject ID column (which matches the columns of `DNAm_df`)
+- `contPheno_char = "is_case"`: the name of the column with the outcome of interest; in this example, heroin use or not. NOTE: at this time, we only support **binary and continuous** outcomes; we are working to add support for categorical and survival outcomes in the future.
+- `covariates_char = c("is_female", "Age", "Age_sq")`: which covariates should be used as moderators of the response's effect on DNA methylation? Often sex, age, and plate/batch effects should be included here.
+- `modelType = "randCoef"`: use a random coefficient mixed model, as described above
+- `arrayType = "EPIC"`: which Illumina manifest matches your data? We currently support 450k and EPIC, but we are researching appropriate statistical methods for whole genome methylation analysis.
+- `outLogFile = paste0("../results/lmmLog_", Sys.Date(), ".txt")`: where should the log file go? This file will contain messages about the convergence of the linear mixed model's optimization routines. If you are running a quick test, this can be `NULL`.
+- `nCores_int = 8L`: how many cores should you use? Note that fitting these mixed models can be memory intensive, so more cores are not always better. Try a few options with smaller subsets of your data to find the "sweet spot".
+
+With 8 cores on my Macbook, this takes 2-4 minutes for ~1100 regions.
+
+```{r, calculate-differential-co-meth-1, eval=FALSE}
+system.time(
+  lmmHeroinOut_df <- lmmTestAllRegions(
+    betas = DNAm_df,
+    region_ls = coMethAgeSex_ls,
+    pheno_df = pheno_df,
+    contPheno_char = "is_case",
+    covariates_char = c("is_female", "Age", "Age_sq"),
+    modelType = "randCoef",
+    arrayType = "EPIC",
+    # outLogFile = paste0("../results/lmmLog_", Sys.Date(), ".txt"),
+    nCores_int = 8L
+  )
+)
+
+write_csv(
+  x = lmmHeroinOut_df,
+  file = "../results/chr16_coMethylated_results_heroin_use_20220716.csv"
+)
+```
+
+Again, we have calculated this output for you:
+```{r, load-differential-co-meth-1, message=FALSE}
+lmmHeroinOut_df <- read_csv(
+  file = "../results/chr16_coMethylated_results_heroin_use_20220716.csv"
+)
+
+lmmHeroinOut_df
+```
+
+
+
+*******************************************************************************
+</br>
+
+# Annotate the Significant Results with `AnnotateResults()` and Inspect
+
+Now we would like to see which regions of the genome have co-methylation that is associated with heroin use, after adjusting for age and sex. Because this is synthetic data, we will use a more relaxed false-discovery rate cutoff.
+
+```{r, annotate-results-1, message=FALSE}
+annotatedRes_df <- 
+  
+  # Filter to rows with significant regions
+  lmmHeroinOut_df %>% 
+  filter(FDR < 0.2) %>% 
+  
+  # AnnotateResults() uses 450k by default, so change the array type to EPIC
+  AnnotateResults(arrayType = "EPIC") %>% 
+  
+  # Wrangle
+  mutate(range = paste0(chrom, ":", start, "-", end)) %>% 
+  select(-chrom, -start, -end, -UCSC_RefGene_Accession) %>% 
+  select(range, everything())
+
+```
+
+```{r, view-annotated-results}
+annotatedRes_df %>% 
+  arrange(FDR) %>% 
+  kable("html") %>%
+  kable_styling("striped") %>%
+  scroll_box(width = "100%")
+```
+
+Note that these results are based on synthetic data, so they should not be interpreted biologically. In the real data, we identified regions in the bodies of CASKIN1 and RHOT2 as having both statistically significant and potentially biological meaningful implications (both with established implications for alcohol use disorder). 
+
+
+
+*******************************************************************************
+</br>
+
+# Conclusion
+
+Give a recap of the main points/functions
+**Need Suky commentary/discussion here**
+
+```{r}
+sessionInfo()
+```
+
+
