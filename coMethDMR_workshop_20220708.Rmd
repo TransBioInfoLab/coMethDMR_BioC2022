@@ -28,12 +28,12 @@ knitr::opts_chunk$set(echo = TRUE)
 
 We present the workflow to analyse DNA methylation data to detect co-methylated genomics regions with differential methylation. There are two main components to the workflow:
 
-1) Detecting genomic regions of **co**-methylation (an unsupervised analysis), and
-2) Testing if methylation in these co-methylated regions are related to the phenotype of interest (a supervised analysis).
+1) Detecting genomic regions of **co**-methylation, and
+2) Testing if methylation in these co-methylated regions are related to the phenotype of interest.
 
 ![](figures/coMethDMR_workflow.jpeg)
 
-We will use the [Tidyverse](https://www.tidyverse.org/) package suite for data wrangling (with added consideration for row names of our methylation data).
+We will use the [Tidyverse](https://www.tidyverse.org/) package suite for data wrangling.
 
 You will need the following packages to complete the exercises in this example:
 ```{r, packages, message=FALSE, warning=FALSE}
@@ -82,10 +82,12 @@ pheno_df[1:5, ]
 ## DNA Methylation Data Structure
 
 **Suky adds bioinformatics details about the collection and pre-processing of the DNA methylation data here.** 
-Missing values were quite rare (about 0.1% of the values) and were imputed via a probe-specific Gaussian process. Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the data is currently embargoed by NIDA, we show a synthetic variant of the real data which preserves correlational structure between the methylation probes.
+Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the data is currently embargoed by NIDA, we show a synthetic variant of the real data which preserves correlational structure between the methylation probes.
 ```{r, load-DNAm-data, message=FALSE}
 DNAm_df <- 
   read_csv("data/dnaM_chr16_synthetic_20220716.csv") %>% 
+  # to preserve row names; note that many Tidyverse functions do not support row
+  #   names for methylation data (and data frames in general)
   as.data.frame() %>% 
   column_to_rownames(var = "Sample")
 
@@ -168,9 +170,15 @@ Because this step does not use the phenotype information, it is *unsupervised*.
 
 **From Lily**: People might ask - why not include the covariates in one model? 
 
-If we want to try to find which CpGs are related to heroin use after adjusting for age and sex, then we first find the methylation M-value residuals. That is, instead of clustering the raw beta values, we first calculate the methylation M values as the base 2 Logit transformation of the beta values, then fit the following model independently for each probe $j$: `M_j ~ age + age ^ 2 + sex`. We use the residuals from these independent linear models as the inputs of the region-based clustering algorithm in Step 2.
+We first find the methylation M-value residuals, then fit the following model separately for each probe $j$: 
 
-Using data from chromosome 16 only, this code runs in 1.6 minutes on my computer.
+$$
+M_{i,j} = \beta_0 + \beta_1 * \text{age}_i + \beta_2 * \text{age}^2_i + \beta_3 * \text{sex}_i + \varepsilon_{i,j}.
+$$
+
+We then use the residuals, $\boldsymbol{\varepsilon}$, from these independent linear models as the inputs for the region-based clustering algorithm in Step 2.
+
+Using data from chromosome 16 only, this code runs in 1.6 minutes on a 2016 MacBook Pro laptop with 16Gb RAM and 1.7 minutes on a 2020 Dell Latitude 5501 with 16 RAM.
 ```{r, calculate-meth-resid1, eval=FALSE}
 system.time(
   residByAgeSex_mat <- GetResiduals(
@@ -200,11 +208,11 @@ residByAgeSex_df[1:5, 1:5]
 ```
 
 
-## Step 2: Detecting Regions of Co-Methylation after Adjusting for Age and Sex
+## Step 2: Detecting Regions of Co-Methylation after Removing for Age and Sex Effects
 
-Now that we've adjusted our methylation values for the relevant confounders and controls, we can then search through the pre-defined regions to find those regions which have co-methylation.
+Now we can search through the pre-defined regions to find those regions which have co-methylation.
 
-Finding all the regions of concurrent methylation in chromosome 16 takes 7-8 minutes. **NOTE**: in the second section of code, we are selecting the option `output = "dataframe"` to show **how** the function marks regions of concurrent methylation; in practice, we use the first section of code and set `output = "CpGs"` for use in downstream analysis.
+Finding all the regions of concurrent methylation in chromosome 16 takes 7-8 minutes on a 2016 MacBook Pro laptop with 16Gb RAM and 15 minutes on a 2020 Dell Latitude 5501 with 16 RAM. **NOTE**: in the second section of code, we are selecting the option `output = "dataframe"` to show **how** the function marks regions of co-methylation; in practice, we use the first section of code and set `output = "CpGs"` for use in downstream analysis.
 ```{r, calculate-concurrent-meth1, eval=FALSE}
 
 ###  For Downstream Analysis  ###
@@ -246,7 +254,7 @@ system.time(
 # )
 ```
 
-As previously, we have also calculated these regions of concurrent methylation.
+As previously, we have also calculated these co-methylated regions.
 ```{r, load-concurrent-meth1}
 # For Analysis
 coMethAgeSex_ls <- readRDS(
@@ -283,7 +291,7 @@ coMethAgeSex_ls[1]
 
 # Identifying Differetially (Co-)Methylated Regions with `lmmTestAllRegions()`
 
-In the previous step, we identified CpG-dense regions which have concurrent methylation. Now, we will fit independent linear mixed models to measure the association between the phenotype of interest and each detected region.
+In the previous step, we identified CpG-dense regions which have concurrent methylation. Now, we will fit separate linear mixed models to test the association between the phenotype of interest and each detected region.
 
 
 ## The Input Data
@@ -329,7 +337,7 @@ We specify the following:
 - `outLogFile = paste0("results/lmmLog_", Sys.Date(), ".txt")`: where should the log file go? This file will contain messages about the convergence of the linear mixed model's optimization routines. If you are running a quick test, this can be `NULL`.
 - `nCores_int = 8L`: how many cores should you use? Note that fitting these mixed models can be memory intensive, so more cores are not always better. Try a few options with smaller subsets of your data to find the "sweet spot".
 
-With 8 cores on my Macbook, this takes 2-4 minutes for ~1100 regions.
+This takes 4 minutes for ~1100 regions using 8 cores on a 2016 MacBook Pro laptop with 16Gb RAM and 4.7 minutes on a 2020 Dell Latitude 5501 with 16 RAM (also using 8 cores).
 
 ```{r, calculate-differential-co-meth-1, eval=FALSE}
 system.time(
