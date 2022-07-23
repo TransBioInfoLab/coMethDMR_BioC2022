@@ -11,7 +11,7 @@
 
 <meta name="author" content="Gabriel J. Odom, Suky Martinez, Tiago Silva, Ingrid Gonzalez, Fernanda Veitzman, Lissette Gomez, Jermaine Jones, and Lily Wang" />
 
-<meta name="date" content="2022-07-22" />
+<meta name="date" content="2022-07-23" />
 
 <title>Detecting Differentially Methylated Regions with coMethDMR</title>
 
@@ -3346,7 +3346,7 @@ function toggle_visibility(id1) {
 
 <h1 class="title toc-ignore">Detecting Differentially Methylated Regions with coMethDMR</h1>
 <p class="author-name">Gabriel J. Odom, Suky Martinez, Tiago Silva, Ingrid Gonzalez, Fernanda Veitzman, Lissette Gomez, Jermaine Jones, and Lily Wang</p>
-<h4 class="date">2022-07-22</h4>
+<h4 class="date">2022-07-23</h4>
 
 </div>
 
@@ -3378,7 +3378,7 @@ library(tidyverse)</code></pre>
 <h1><span class="header-section-number">2</span> Data Inputs and Setup</h1>
 <div id="phenotype-data-structure" class="section level2" number="2.1">
 <h2><span class="header-section-number">2.1</span> Phenotype Data Structure</h2>
-<p><strong>From Lily</strong> give the biological/medical context of the data first. <strong>Suky’s more detailed introduction and motivation goes here.</strong></p>
+<p>An emerging field of research suggests that many disease conditions and environmental factors may accelerate cellular age (AKA epigenetic age) relative to chronological age. Epigenetic aging is thought to play a direct role in age-related illnesses and its biomarkers alone can significantly predict mortality. One of the most valid and versatile epigenetic biomarkers compares predicted epigenetic age (based on quantification of DNA methylation) to actual chronological age in order to observe evidence of accelerated epigenetic aging. The authors sought to investigate the association between long-term illicit opioid use and accelerated DNA methylation among individuals of African ancestry who use heroin.</p>
 <pre class="r"><code>pheno_df &lt;-
   read_csv(&quot;data/pheno_clean_20220225.csv&quot;) %&gt;% 
   # the coMethDMR package expects the sample ID column to be named &quot;Sample&quot;
@@ -3401,8 +3401,12 @@ pheno_df[1:5, ]</code></pre>
 </div>
 <div id="dna-methylation-data-structure" class="section level2" number="2.2">
 <h2><span class="header-section-number">2.2</span> DNA Methylation Data Structure</h2>
-<p><strong>Suky adds bioinformatics details about the collection and pre-processing of the DNA methylation data here.</strong>
-Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the data is currently embargoed by NIDA, we show a synthetic variant of the real data which preserves correlational structure between the methylation probes.</p>
+<p>DNA isolated from peripheral leukocytes was obtained from male and female participants of African ancestry who confirmed heroin as their drug of choice. Venous blood was collected in 8.5 ml ACD vacutainer tubes. Within 48 hrs of their collection, blood samples were transferred to Columbia University’s Human Genetics Research Core where DNA was isolated and stored at -20 C. Once extracted, DNA samples were checked for purity at an OD280 ratio of between 1.8 - 2.0. Methylation analysis was performed with the Illumina Infinium Human Methylation EPIC BeadChip that measures bisulfite-conversion-based, single-CpG resolution DNAm levels at 866,836 CpG sites in the human genome. The standard protocol of Illumina methylation assays quantifies methylation levels by the beta value using the ratio of intensities between methylated (signal A) and un-methylated (signal B) alleles. Specifically, the beta value is calculated from the intensity of the methylated (M corresponding to signal A) and un-methylated (U corresponding to signal B) alleles, as the ratio of fluorescent signals:</p>
+<p><span class="math display">\[
+\text{beta} := \frac{Max(M,0)}{Max(M,0)+Max(U,0)+100}.
+\]</span></p>
+<p>Thus, beta values range from 0 (completely un-methylated) to 1 (completely methylated) (Weinhold et al., 2016)[<a href="https://www.doi.org/10.1186/s12859-016-1347-4" class="uri">https://www.doi.org/10.1186/s12859-016-1347-4</a>].</p>
+<p>Due to computational and time constraints, we will only show examples from chromosome 16. Also, because the real data is currently embargoed by NIDA, we show the real data plus small synthetic random perturbations (while preserving correlational structure between the methylation probes).</p>
 <pre class="r"><code>DNAm_df &lt;- 
   read_csv(&quot;data/dnaM_chr16_synthetic_20220716.csv&quot;) %&gt;% 
   # to preserve row names; note that many Tidyverse functions do not support row
@@ -4136,8 +4140,12 @@ S_Shelf
 </div>
 <div id="conclusion" class="section level1" number="6">
 <h1><span class="header-section-number">6</span> Conclusion</h1>
-<p>Give a recap of the main points/functions
-<strong>Need Suky commentary/discussion here</strong></p>
+<p>There were two main components of our workflow:</p>
+<ol style="list-style-type: decimal">
+<li>We first detected genomic regions of <strong>co</strong>-methylation, after adjusting the DNA methylation for subject age and sex.</li>
+<li>We tested if methylation in these co-methylated regions was related to long-term heroin use, and then mapped regions with heroin-use-associated methylation to genes.</li>
+</ol>
+<p>To our knowledge, this is the first time this technique has been applied to methylation data from individuals with opioid use disorder. We have provided preliminary support for this novel investigatory methodology’s ability to identify global changes in DNA methylation among individuals who misuse addictive substances. Previous studies have suggested some of the regions we identified may be involved with some of the underlying mechanisms within the opioid system. We are currently conducting additional analysis and modeling, and a manuscript with our findings is in preparation. Future studies may be able to integrate this tool to better understand the epigenetic effects of opioid use and substnance misuse as a whole.</p>
 <pre class="r"><code>sessionInfo()</code></pre>
 <pre><code>## R version 4.2.0 (2022-04-22)
 ## Platform: x86_64-apple-darwin17.0 (64-bit)
