@@ -59,4 +59,8 @@ BiocManager::install("pathwayPCA")
 
 
 # Workshop
-To see the workshop with rendered results (powered by [GitHack](http://raw.githack.com/faq)), please visit: <https://rawcdn.githack.com/TransBioInfoLab/coMethDMR_BioC2022/2c852b2345b32653bab0eb3201faa64b56853e74/coMethDMR_workshop_20220708.html>
+To see the workshop with rendered results (powered by [GitHack](http://raw.githack.com/faq)), please visit: 
+
+- Prod: <https://rawcdn.githack.com/TransBioInfoLab/coMethDMR_BioC2022/e0ece83f006c9c3dfd369627c51a4a61f6eaa6c9/coMethDMR_workshop_20220708.html>
+- Dev: <https://raw.githack.com/TransBioInfoLab/coMethDMR_BioC2022/main/coMethDMR_workshop_20220708.html>
+
